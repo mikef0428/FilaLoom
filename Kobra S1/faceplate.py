@@ -218,7 +218,7 @@ def holder_plate():
     return trimesh.creation.extrude_polygon(plate, height=HOLDER_T)   # prints flat as-is
 
 
-def carrier():
+def carrier(printable=True):
     cx = SLOT_X / 2
     blk = trimesh.creation.box(bounds=[[cx - ARM_W / 2, -CARRIER_H, 0], [cx + ARM_W / 2, 0, CARRIER_T]])
     bz = 2.0 + HUB_BORE_D / 2   # 2 mm wall to the arm
@@ -235,6 +235,8 @@ def carrier():
         h.apply_translation([sx, -CARRIER_H / 2, CARRIER_T / 2])
         cuts.append(h)
     c = blk.difference(cuts, engine="manifold")
+    if not printable:
+        return c   # plate-local frame: top at y 0, back face on the arm at z 0
     c.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))  # bore vertical
     c.apply_translation([0, 0, -c.bounds[0][2]])
     return c
