@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pymeshfix
 import trimesh
-from shapely.geometry import Point, box as sbox
+from shapely.geometry import Point, Polygon, box as sbox
 from shapely.ops import unary_union
 
 HERE = Path(__file__).parent
@@ -29,6 +29,15 @@ FAN_CENTER, FAN_OPEN_D = (125.0, 130.0), 36.0
 FRONT_CUPS = [(96.25, 77.2), (154.6, 77.25), (96.2, 157.35), (154.65, 157.35)]
 BACK_CUPS = [(398.3, 94.4), (398.35, 152.9), (478.5, 94.4), (478.5, 152.9)]
 OLD_CUP_D, OLD_CUP_DEPTH = 5.78, 3.0
+# back cover -> faceplate frame (proper rotation; x spans match 92.4..158.4, faces meet at PARTING_Y)
+BACK_TO_FRONT = np.array([[0, 0, 1, 1.71], [0, -1, 0, PARTING_Y - 39.18], [1, 0, 0, -321.13], [0, 0, 0, 1]])
+
+# --- interlock: outer half-sleeves slide over the back cover's cup tubes (OD ~7.2, axis Y) ---
+# They take X/Z shear and the depositor's overhang moment; magnets only hold Y.
+# Outer half only: the wall rib runs through each tube at x = cup +-0.8 and the inner side is toolhead.
+BACK_TUBE_R, SLEEVE_GAP, SLEEVE_R_OUT = 3.6, 0.25, 5.1
+SLEEVE_LEN = 3.4              # stops ~1 mm short of the side screw heads at y ~ -61.3
+RIB_CLEAR = 1.1               # half-width kept open around the rib
 X0, X1, Z0, Z1, CORNER_R = 92.4, 158.4, 92.0, 176.59, 5.0
 
 # --- FilaLoom A1 docking plate (Cover - Front.stl), plate coords px right, py up, pz out ---
@@ -98,6 +107,34 @@ def recut_magnets(mesh, cups, face_y, inward):
     return mesh.union(shims, engine="manifold")
 
 
+def back_footprint(back_mounted):
+    """Union of the mounted back cover's X-Z sections over the sleeve depth, grown by the fit gap."""
+    polys = []
+    for y in np.linspace(PARTING_Y - SLEEVE_LEN - 0.2, PARTING_Y - 0.05, 12):
+        s = back_mounted.section(plane_origin=[0, y, 0], plane_normal=[0, 1, 0])
+        if s is None:
+            continue
+        for e in s.discrete:
+            if len(e) > 3:
+                polys.append(Polygon(e[:, [0, 2]]).buffer(0))
+    return unary_union(polys).buffer(SLEEVE_GAP, 16)
+
+
+def interlock_sleeves(cups, back_mounted):
+    keepout = back_footprint(back_mounted)
+    parts = []
+    for x, z in cups:
+        side = -1 if x < (X0 + X1) / 2 else 1
+        outer = sbox(x + RIB_CLEAR, z - 10, x + 10, z + 10) if side > 0 else sbox(x - 10, z - 10, x - RIB_CLEAR, z + 10)
+        ring = lambda r_in: Point(x, z).buffer(SLEEVE_R_OUT, 64).difference(Point(x, z).buffer(r_in, 64)).intersection(outer)
+        sleeve = ring(BACK_TUBE_R + SLEEVE_GAP).difference(keepout).buffer(-0.4).buffer(0.4)  # drop slivers < 0.8
+        for p in getattr(sleeve, "geoms", [sleeve]):
+            if p.area > 1.0:
+                parts.append(extrude_xz(p, PARTING_Y - SLEEVE_LEN, PARTING_Y + 0.01))
+        parts.append(extrude_xz(ring(OLD_CUP_D / 2 + 0.1), PARTING_Y, PARTING_Y + 3.0))  # collar fused to the front cup
+    return parts
+
+
 def load_fixed(path):
     m = trimesh.load(path)
     m.merge_vertices()
@@ -123,7 +160,9 @@ def faceplate():
     lug.apply_translation([lx0, FACE_Y - 0.01, lz0])
 
     boss = cyl_y(*FAN_HOLES[2], 7.0, TOP_POST_END_Y, FAN_FACE_Y + 0.01)
-    body = shell.union([panel, lug, boss], engine="manifold")
+    back_mounted = back_cover()
+    back_mounted.apply_transform(BACK_TO_FRONT)
+    body = shell.union([panel, lug, boss] + interlock_sleeves(FRONT_CUPS, back_mounted), engine="manifold")
 
     cx, cz = to_panel(*PATTERN_CENTER)
     fan_open = Point(*FAN_CENTER).buffer(FAN_OPEN_D / 2, 128).difference(
@@ -245,6 +284,14 @@ if __name__ == "__main__":
     out.mkdir(exist_ok=True)
     fp = faceplate()
     assert fp.is_watertight and fp.body_count == 1, (fp.is_watertight, fp.body_count)
+    # fit check against the back cover as mounted: no shared volume, and the sleeves really overlap the tubes
+    bk_mounted = back_cover()
+    bk_mounted.apply_transform(BACK_TO_FRONT)
+    clash = fp.intersection(bk_mounted, engine="manifold")
+    assert clash.volume < 0.5, f"faceplate overlaps back cover by {clash.volume:.2f} mm3"
+    behind = trimesh.creation.box(bounds=[[0, PARTING_Y - SLEEVE_LEN, 0], [300, PARTING_Y - 0.1, 300]])
+    assert fp.intersection(behind, engine="manifold").volume > 50, "sleeves missing"
+    print(f"interlock: faceplate/back cover overlap {clash.volume:.3f} mm3")
     depth = FACE_Y - PARTING_Y
     assert abs(depth - 42.33) < 0.05, depth
     # print standing as mounted (cad dfm --candidates: ~4x less support than face-up); use a brim
