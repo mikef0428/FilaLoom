@@ -40,7 +40,7 @@ LUG_H, LUG_TOP_R = 15.25, 6.0
 LOCK_D, LOCK_PZ = 6.06, 7.77   # hole axis along py, height above plate face
 PATTERN_CENTER = (26.5, 37.0)
 
-DOCK_MAGNET_D, DOCK_MAGNET_T = 8.5, 2.2  # 8x2 discs behind the cones, pair with the depositor's
+DOCK_MAGNET_D, DOCK_MAGNET_T = 5.3, 2.1  # 5x2 discs behind the cones (A1 used 8x2), glue fit
 
 # --- docked depositor needle, from its STLs (plate coords) ---
 # needle axis: holder bore 6 mm above slot floor (Front Body z 120) -> z 126; docking face = Back Body
@@ -201,6 +201,39 @@ def carrier():
     return c
 
 
+# --- FilaLoom depositor re-seated for 5x2 magnets (stock uses 8x2 in 8.49 pockets) ---
+DEP = HERE.parent / "FilaLoom Components STLs" / "Yarn Depositor"
+SEAT_D, SEAT_T, OLD_POCKET_D = 5.3, 2.1, 8.49
+DOCK_PTS = [(8.97, 9.0), (44.0, 8.98), (26.5, 66.0)]   # x, y in the bodies' shared frame
+# part, axis, pocket centres (other two axes, in order), face, inward sign, old depth, new seat?
+DEPOSITOR_POCKETS = [
+    ("Front Body", 2, DOCK_PTS, 108.5, +1, 1.1, True),    # glue face 108.5 (bumps reach 108.0); magnets live here
+    ("Back Body", 2, DOCK_PTS, 69.0, -1, 1.5, False),     # matching recess, now solid
+    ("Docking Bars", 0, [(19.03, 85.0), (63.06, 84.98)], 70.0, +1, 2.4, True),
+]
+
+
+def cyl_axis(axis, c2, d, a0, a1):
+    c = trimesh.creation.cylinder(radius=d / 2, height=abs(a1 - a0), sections=64)
+    if axis == 0:
+        c.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [0, 1, 0]))
+    elif axis == 1:
+        c.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
+    pos = np.insert(np.array(c2, float), axis, (a0 + a1) / 2)
+    c.apply_translation(pos)
+    return c
+
+
+def depositor_5x2(name, axis, pts, face, inward, old_depth, seat):
+    m = trimesh.load(DEP / f"Depositor - {name}.stl")
+    plugs = [cyl_axis(axis, p, OLD_POCKET_D + 0.4, face, face + inward * (old_depth + 0.2)) for p in pts]
+    m = m.union(plugs, engine="manifold")
+    if seat:
+        m = m.difference([cyl_axis(axis, p, SEAT_D, face - inward * 1, face + inward * SEAT_T) for p in pts],
+                         engine="manifold")
+    return m
+
+
 def back_cover():
     back = load_fixed(REF / "kobra s1 back 5x3 magnets.stl")
     face_y = back.bounds[0][1]
@@ -213,7 +246,7 @@ if __name__ == "__main__":
     fp = faceplate()
     assert fp.is_watertight and fp.body_count == 1, (fp.is_watertight, fp.body_count)
     depth = FACE_Y - PARTING_Y
-    assert abs(depth - 42.43) < 0.05, depth
+    assert abs(depth - 42.33) < 0.05, depth
     # print standing as mounted (cad dfm --candidates: ~4x less support than face-up); use a brim
     fp.apply_translation(-np.array([fp.centroid[0], fp.centroid[1], fp.bounds[0][2]]))
     fp.export(out / "S1 Faceplate - FilaLoom Magnetic 5x2.stl")
@@ -237,3 +270,9 @@ if __name__ == "__main__":
     print("A (nozzle below cover edge) -> carrier top below depositor bottom edge, for 25 mm needle dip:")
     for a in range(0, 16, 2):
         print(f"  A={a:2d} mm -> {-carrier_top_for(a):5.1f} mm")
+
+    for spec in DEPOSITOR_POCKETS:
+        part = depositor_5x2(*spec)
+        assert part.is_watertight and part.body_count == 1, spec[0]
+        part.export(out / f"Depositor - {spec[0]} 5x2.stl")
+    print("depositor: Front Body, Back Body, Docking Bars re-seated for 5x2 magnets")
