@@ -68,6 +68,15 @@ FACE_Y = FAN_FACE_Y + PANEL_T
 PANEL_CX, PANEL_CZ = (X0 + X1) / 2, (Z0 + Z1) / 2
 
 
+def on_bed(m, axis=None, deg=0):
+    """Turn a part to its print orientation (cad dfm --candidates' pick), centred on the bed at z=0."""
+    if axis:
+        m.apply_transform(trimesh.transformations.rotation_matrix(np.radians(deg), {"x": [1, 0, 0], "y": [0, 1, 0]}[axis]))
+    lo, hi = m.bounds
+    m.apply_translation([-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2, -lo[2]])
+    return m
+
+
 def to_panel(px, py):
     """Plate coords -> panel x, z (viewer's right is -X)."""
     return PANEL_CX - (px - PATTERN_CENTER[0]), PANEL_CZ + (py - PATTERN_CENTER[1])
@@ -296,12 +305,12 @@ if __name__ == "__main__":
     print(f"interlock: faceplate/back cover overlap {clash.volume:.3f} mm3")
     depth = FACE_Y - PARTING_Y
     assert abs(depth - 42.33) < 0.05, depth
-    # print standing as mounted (cad dfm --candidates: ~4x less support than face-up); use a brim
-    fp.apply_translation(-np.array([fp.centroid[0], fp.centroid[1], fp.bounds[0][2]]))
-    fp.export(out / "S1 Faceplate - FilaLoom Magnetic 5x2.stl")
+    # print standing as mounted: least support of all six (face-down stands on the lug, face-up on the
+    # sleeves), and the lug's layers run along its pull. It rests on the lower sleeves: brim + tree supports
+    on_bed(fp).export(out / "S1 Faceplate - FilaLoom Magnetic 5x2.stl")
     bk = back_cover()
     assert bk.is_watertight and bk.body_count == 1, (bk.is_watertight, bk.body_count)
-    bk.export(out / "S1 Back Cover - Magnetic 5x2.stl")
+    on_bed(bk, "x", -90).export(out / "S1 Back Cover - Magnetic 5x2.stl")
     print(f"faceplate depth {depth:.1f} mm (stock magnetic 56.9), lug +{LUG_H} mm; bounds {fp.bounds.round(1).tolist()}")
     tip_z = to_panel(0, NEEDLE_TIP_PY)[1]
     print(f"docked needle: axis {FACE_Y + NEEDLE_FWD:.1f} mm in front of the old cover face, "
@@ -323,5 +332,7 @@ if __name__ == "__main__":
     for spec in DEPOSITOR_POCKETS:
         part = depositor_5x2(*spec)
         assert part.is_watertight and part.body_count == 1, spec[0]
+        # flat face down (cad dfm --candidates): Front/Back Body flipped, Docking Bars on their side, pins up
+        on_bed(part, *{"Front Body": ("x", 180), "Back Body": ("x", 180), "Docking Bars": ("y", -90)}[spec[0]])
         part.export(out / f"Depositor - {spec[0]} 5x2.stl")
     print("depositor: Front Body, Back Body, Docking Bars re-seated for 5x2 magnets")

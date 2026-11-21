@@ -10,7 +10,6 @@ import trimesh
 
 import faceplate as F
 
-STL = F.HERE / "STL"
 FL = F.HERE.parent / "FilaLoom Components STLs"
 A_MM = 4.0                    # nozzle below cover edge (guess until measured)
 
@@ -54,13 +53,14 @@ def parts():
     back = F.back_cover()
     back.apply_transform(F.BACK_TO_FRONT)
     load = lambda p: trimesh.load(p)
+    dep = {spec[0]: F.depositor_5x2(*spec) for spec in F.DEPOSITOR_POCKETS}   # file frame (STLs are on-bed)
     return [
         ("S1 Faceplate", F.faceplate(), [74, 111, 165]),
         ("S1 Back Cover", back, [90, 150, 120]),
         ("Lock Cylinder", placed(load(FL / "Print Head Cover/Cover - Lock Cylinder.stl"), cover_frame(26.9)), [170, 170, 170]),
-        ("Depositor Back Body", placed(load(STL / "Depositor - Back Body 5x2.stl"), cover_frame(67.5)), [80, 110, 220]),
-        ("Depositor Front Body", placed(load(STL / "Depositor - Front Body 5x2.stl"), FRONT_BODY), [60, 90, 200]),
-        ("Depositor Docking Bars", placed(load(STL / "Depositor - Docking Bars 5x2.stl"), BARS), [100, 130, 230]),
+        ("Depositor Back Body", placed(dep["Back Body"], cover_frame(67.5)), [80, 110, 220]),
+        ("Depositor Front Body", placed(dep["Front Body"], FRONT_BODY), [60, 90, 200]),
+        ("Depositor Docking Bars", placed(dep["Docking Bars"], BARS), [100, 130, 230]),
         ("Needle Holder Plate", placed(F.holder_plate(), SLOT), [210, 140, 60]),
         ("Needle Carrier", placed(F.carrier(printable=False),
                                   SLOT @ trimesh.transformations.translation_matrix([0, t, F.HOLDER_T])), [220, 110, 50]),
